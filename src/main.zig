@@ -11,48 +11,56 @@ pub fn main() !void {
     }
     defer glfwTerminate();
 
-    var windowW: u32 = 400;
-    var windowH: u32 = 300;
-    var window = glfwCreateWindow(@intCast(c_int, windowW),
-                                  @intCast(c_int, windowH),
-                                  "Raycaster", null, null);
-    if (window == null) {
-        return error.create_window_failed;
-    }
+    var width: c_int = 600;
+    var height: c_int = 400;
+    var monitor: ?*GLFWmonitor = null;
+    var share_window: ?*GLFWwindow = null;
+    var window = glfwCreateWindow(width, height,
+                                  "Software Rendering Starter",
+                                  monitor, share_window) orelse
+                                return error.create_window_failed;
 
     glfwMakeContextCurrent(window);
     glClearColor(0.1, 0.1, 0.1, 1.0);
 
     var mainAllocator = std.heap.c_allocator;
 
-    var bXOR = try Bitmap.init(mainAllocator, windowW, windowH);
-    var y : u32 = 0;
-    while (y < bXOR.height) : (y += 1) {
-        var x : u32 = 0;
-        while (x < bXOR.width) : (x += 1) {
-            const lum = @truncate(u8, x ^ y);
-            bXOR.set(x, y, Color.gray(lum));
-        }
-    }
+    var bCanvas = try Bitmap.init(mainAllocator,
+                                  @intCast(u32, width),
+                                  @intCast(u32, height));
 
     while (glfwWindowShouldClose(window) == GL_FALSE) {
+        // Refresh the current window dimensions
+        glfwGetWindowSize(window, &width, &height);
+        if (bCanvas.width != width or bCanvas.height != height) {
+            try bCanvas.resize(mainAllocator, @intCast(u32, width), @intCast(u32, height));
+        }
+
         glClear(GL_COLOR_BUFFER_BIT);
 
         // Draw here
-        glDrawPixels(@intCast(c_int, bXOR.width),
-                     @intCast(c_int, bXOR.height),
+        var y : u32 = 0;
+        while (y < bCanvas.height) : (y += 1) {
+            var x : u32 = 0;
+            while (x < bCanvas.width) : (x += 1) {
+                const lum = @truncate(u8, x ^ y);
+                bCanvas.set(x, y, Color.gray(lum));
+            }
+        }
+
+        // Blit the pixels to the window
+        glDrawPixels(@intCast(c_int, bCanvas.width),
+                     @intCast(c_int, bCanvas.height),
                      GL_RGBA, GL_UNSIGNED_BYTE,
-                     bXOR.data.ptr);
+                     bCanvas.data.ptr);
 
         glfwSwapBuffers(window);
 
         glfwPollEvents();
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
     }
-}
-
-export fn errorCallback(err: c_int, description: [*c]const u8) void {
-    _ = err;
-    std.debug.panic("Error: {s}\n", .{description});
 }
 
 const Color = packed struct {
@@ -76,6 +84,7 @@ const Bitmap = struct {
     height: u32,
     data: []Color,
 
+    ///
     pub fn init(allocator: *std.mem.Allocator, w: u32, h: u32) !Bitmap {
         var data = try allocator.alloc(Color, w * h);
         std.mem.set(Color, data, DebugColor);
@@ -86,13 +95,28 @@ const Bitmap = struct {
         };
     }
 
-    pub fn set(self: *Bitmap, x: u32, y: u32, color: Color) void {
-        //self.index(x,y).* = color;
-        self.data[y*self.width+x] = color;
+    ///
+    pub fn resize(self: *Bitmap, allocator: *std.mem.Allocator,
+                  w: u32, h: u32) !void {
+
+        self.data = try allocator.realloc(self.data, w * h);
+        self.width = w;
+        self.height = h;
     }
 
+    ///
+    pub fn set(self: *Bitmap, x: u32, y: u32, color: Color) void {
+        self.index(x,y).* = color;
+    }
+
+    ///
     pub fn get(self: *const Bitmap, x: u32, y: u32) Color {
         return self.index(x, y).*;
+    }
+
+    /// Fills the bitmap with the specified color
+    pub fn fill(self: *Bitmap, color: Color) void {
+        std.mem.set(Color, self.data, color);
     }
 
     fn index(self: *const Bitmap, x: u32, y: u32) *Color {
@@ -122,3 +146,8 @@ const Texture = struct {
                      GL_UNSIGNED_BYTE, b.data.ptr);
     }
 };
+
+export fn errorCallback(err: c_int, description: [*c]const u8) void {
+    _ = err;
+    std.debug.panic("Error: {s}\n", .{description});
+}
